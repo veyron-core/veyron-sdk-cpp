@@ -1,0 +1,249 @@
+syntax = "proto3";
+
+package veyron;
+
+// v 1.2  (frame MAC: session_nonce, ERR_MAC_MISSING/INVALID)
+
+// ═══════════════════════════════════════════
+// root envelope — every message goes through this
+// ═══════════════════════════════════════════
+
+message Envelope {
+  string  message_id  = 1;
+  uint64  timestamp   = 2;
+  string  sender_id   = 3;
+
+  oneof payload {
+    PluginRegister    plugin_register    = 10;
+    PluginRegisterAck plugin_register_ack = 11;
+    PluginShutdown    plugin_shutdown    = 12;
+
+    ActionRequest     action_request     = 20;
+    ActionResponse    action_response    = 21;
+
+    KernelCommand     kernel_command     = 30;
+    KernelCommandAck  kernel_command_ack = 31;
+
+    Event             event              = 40;
+    EventAck          event_ack          = 41;
+    Subscribe         subscribe          = 42;
+    Unsubscribe       unsubscribe        = 43;
+
+    // Peer-to-peer plugin<->plugin streaming only — the kernel does not
+    // consume audio itself. Sending this with target "kernel" is a usage
+    // error and gets ERR_UNKNOWN like any other unhandled kernel-targeted
+    // message (docs/FRAMING.md).
+    AudioStreamChunk  audio_stream_chunk = 60;
+
+    Ping              ping               = 90;
+    Pong              pong               = 91;
+    ErrorMessage      error              = 92;
+  }
+
+  // version (4): never set by any SDK, never checked by the kernel — no
+  // versioning scheme exists yet. Retired rather than half-implemented
+  // (AUDIT M-05, R5-12); a real scheme is future work.
+  reserved 4, 50, 51, 52;
+  reserved "version", "ai_request", "ai_response", "ai_stream_chunk";
+}
+
+
+// ═══════════════════════════════════════════
+// plugin lifecycle
+// ═══════════════════════════════════════════
+
+message PluginRegister {
+  string          plugin_id    = 1;  // unique name, e.g. "weather"
+  // Plugin's own semver, e.g. "1.0.0". Currently descriptive only — the
+  // kernel does not store, display, or validate it (AUDIT M-05, R5-12).
+  // Version *compatibility* is enforced separately, at install time, via
+  // PluginEntry.min_kernel_version/max_kernel_version in the marketplace
+  // registry (docs/PLUGIN_REGISTRY_SCHEMA.md) — that check already exists
+  // and covers the case this field looked like it should.
+  string          version      = 2;
+  string          description  = 3;
+  PluginManifest  manifest     = 4;
+  string          jwt_token    = 5;  // auth token (required when kernel has jwt_secret configured)
+}
+
+message PluginRegisterAck {
+  bool    accepted       = 1;
+  string  reject_reason  = 2;
+  repeated string granted_permissions = 3;
+  bytes   session_nonce  = 4;  // 16 random bytes; HKDF salt for the frame MAC key
+}
+
+message PluginShutdown {
+  string  reason        = 1;    uint32  grace_seconds = 2;
+}
+
+
+// ═══════════════════════════════════════════
+// manifest — what a plugin declares it can do
+// ═══════════════════════════════════════════
+
+message PluginManifest {
+  repeated string  permissions  = 1;  // see PermissionType below
+  repeated string  actions      = 2;  // actions this plugin can perform
+  repeated string  events       = 3;  // events it wants to subscribe to
+  // Per-plugin IPC allowlist (T-04). Plugin may only unicast to plugin_ids
+  // listed here. Empty list = deny-all (even with PERMISSION_IPC_SEND).
+  repeated string  ipc_targets  = 7;
+
+  // needs_gpu/priority (5, 6): never set by any SDK, never read by the
+  // kernel — there's no scheduler to act on them (AUDIT M-05, R5-12).
+  // Retired rather than wired up: scheduling policy is out of scope for a
+  // "dumb byte router" kernel per the manifesto.
+  reserved 4, 5, 6;
+  reserved "needs_ai", "needs_gpu", "priority";
+}
+
+enum PermissionType {
+  PERMISSION_UNKNOWN    = 0;
+  PERMISSION_NETWORK    = 1;  // outbound http requests
+  PERMISSION_FILES_READ = 2;  // read files
+  PERMISSION_FILES_WRITE = 3; // write files
+  PERMISSION_SYSTEM     = 4;  // system metrics (cpu, ram)
+  PERMISSION_AUDIO      = 5;  // mic and audio out (stt/tts)
+  PERMISSION_NOTIFY     = 6;  // send notifications
+  PERMISSION_SCHEDULER  = 8;  // create timers and alarms
+  reserved 7;
+  reserved "PERMISSION_AI";
+  PERMISSION_BROWSER    = 9;  // control the browser
+  PERMISSION_IPC_SEND   = 10; // send messages to other plugins (peer-to-peer)
+  PERMISSION_AUDIO_STREAM = 11; // send/receive raw audio frames via FLAG_RAW_BINARY
+  PERMISSION_KERNEL_ADMIN = 12; // admin KernelCommands (reload_config etc); health_check exempt
+}
+
+
+// ═══════════════════════════════════════════
+// actions: plugin → kernel
+// plugin asks the kernel to do something
+// ═══════════════════════════════════════════
+
+message ActionRequest {
+  string  action_id   = 1;  // uuid, used to match the response
+  string  action      = 2;  // action name: "get_weather", "play_audio"...
+  bytes   params_json = 3;  // json payload with action params
+  uint32  timeout_ms  = 4;  // response wait timeout in ms (0 = default 30s)
+}
+
+message ActionResponse {
+  string      action_id   = 1;
+  ActionStatus status     = 2;
+  bytes       data_json   = 3;  // json with the result
+  string      error       = 4;  // set when status != OK
+}
+
+enum ActionStatus {
+  ACTION_OK              = 0;
+  ACTION_ERROR           = 1;
+  ACTION_TIMEOUT         = 2;
+  ACTION_PERMISSION_DENY = 3;  // plugin didn't declare the required permission
+  ACTION_NOT_FOUND       = 4;  // no such action in the kernel
+}
+
+
+// ═══════════════════════════════════════════
+// kernel commands: kernel → plugin
+// kernel asks a plugin to do something
+// ═══════════════════════════════════════════
+
+message KernelCommand {
+  string  command_id  = 1;
+  string  command     = 2;  // command name, e.g. "reload_config", "health_check"
+  bytes   params_json = 3;
+}
+
+message KernelCommandAck {
+  string        command_id = 1;
+  CommandStatus status     = 2;
+  bytes         data_json  = 3;
+  string        error      = 4;
+}
+
+enum CommandStatus {
+  COMMAND_OK                 = 0;
+  COMMAND_ERROR              = 1;
+  COMMAND_UNKNOWN            = 2;  // plugin doesn't know this command
+  COMMAND_PERMISSION_DENIED  = 3;  // plugin didn't declare PERMISSION_KERNEL_ADMIN
+}
+
+
+// ═══════════════════════════════════════════
+// events: kernel → plugins
+// publishing events to subscribers
+// ═══════════════════════════════════════════
+
+message Event {
+  string  event_id    = 1;
+  string  event_type  = 2;  // e.g. "alarm.fired", "stt.result", "system.low_memory"
+  bytes   payload_json = 3;
+  uint32  retry_count = 4;  // kernel fills this in on redelivery
+}
+
+message EventAck {
+  string event_id = 1;  // confirms the plugin received and handled it
+}
+
+// plugin → kernel: subscribe to event types
+message Subscribe {
+  repeated string event_types = 1;  // "*" subscribes to everything
+}
+
+// plugin → kernel: unsubscribe
+message Unsubscribe {
+  repeated string event_types = 1;
+}
+
+
+// ═══════════════════════════════════════════
+// audio streaming
+// ═══════════════════════════════════════════
+
+enum AudioCodec {
+  AUDIO_CODEC_UNSPECIFIED = 0;
+  AUDIO_CODEC_PCM_S16LE  = 1;  // raw PCM, 16-bit signed LE — use for local UDS
+  AUDIO_CODEC_OPUS       = 2;  // Opus — use for WebSocket (bandwidth)
+}
+
+message AudioStreamChunk {
+  uint32     stream_id      = 1;  // identifies stream session; plugins assign this
+  AudioCodec codec          = 2;
+  uint32     sample_rate    = 3;  // Hz: 16000, 44100, 48000
+  uint32     channels       = 4;  // 1 = mono, 2 = stereo
+  bytes      data           = 5;  // raw PCM_S16LE or Opus packet
+  bool       end_of_stream  = 6;  // sender signals stream closed
+}
+
+
+// ═══════════════════════════════════════════
+// housekeeping messages
+// ═══════════════════════════════════════════
+
+message Ping {
+  uint64 timestamp = 1;
+}
+
+message Pong {
+  uint64 original_timestamp = 1;
+  uint64 server_timestamp   = 2;
+}
+
+message ErrorMessage {
+  ErrorCode code    = 1;
+  string    message = 2;
+  string    details = 3;  // extra context for debugging
+}
+
+enum ErrorCode {
+  ERR_UNKNOWN           = 0;
+  ERR_PROTOCOL_MISMATCH = 1;  // protocol version mismatch
+  ERR_NOT_REGISTERED    = 2;  // plugin hasn't registered yet
+  ERR_RATE_LIMITED      = 3;  // too many requests
+  ERR_INTERNAL          = 4;  // internal kernel error
+  ERR_DESERIALIZATION   = 5;  // failed to parse the message
+  ERR_MAC_MISSING       = 6;  // registered conn sent an un-MAC'd frame while secured
+  ERR_MAC_INVALID       = 7;  // frame MAC verification failed (tampering)
+  ERR_PERMISSION_DENIED = 8;  // plugin lacks required permission for this operation
+}

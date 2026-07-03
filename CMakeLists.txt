@@ -16,8 +16,9 @@ find_package(absl REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(ZSTD REQUIRED IMPORTED_TARGET libzstd)
 
-# Generate C++ bindings from the shared proto
-set(PROTO_FILE ${CMAKE_CURRENT_SOURCE_DIR}/../../proto/veyron_protocol.proto)
+# Generate C++ bindings from the vendored proto (sourced from veyron-wire's
+# wire/proto/veyron_protocol.proto — re-copy by hand when the protocol changes)
+set(PROTO_FILE ${CMAKE_CURRENT_SOURCE_DIR}/proto/veyron_protocol.proto)
 protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${PROTO_FILE})
 
 add_library(veyron_sdk_cpp STATIC

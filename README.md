@@ -7,6 +7,13 @@ talks to the kernel over a Unix domain socket using the Veyron wire protocol:
 framed messages carrying Protobuf envelopes, with optional zstd compression,
 HMAC-SHA256 frame authentication, and fragmentation.
 
+## Protocol source
+
+`proto/veyron_protocol.proto` is vendored from
+[`veyron-wire`](https://crates.io/crates/veyron-wire)'s `wire/proto/`. It's
+copied by hand, not path-referenced — re-sync it when the protocol changes
+upstream.
+
 ## Requirements
 
 - CMake ≥ 3.20, C++17
