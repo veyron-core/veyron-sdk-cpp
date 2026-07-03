@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <cerrno>
 #include <cstring>
 #include <stdexcept>
 
@@ -17,6 +18,7 @@ VeyronClient::VeyronClient(std::string socket_path, std::vector<uint8_t> secret)
 VeyronClient::~VeyronClient() { close(); }
 
 void VeyronClient::connect() {
+    close();
     fd_ = ::socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd_ < 0)
         throw std::runtime_error("veyron: socket() failed");
@@ -112,6 +114,8 @@ void VeyronClient::send_envelope_no_mac(const std::string& target, const Envelop
     size_t remaining   = frame.size();
     while (remaining > 0) {
         ssize_t written = ::write(fd_, ptr, remaining);
+        if (written < 0 && errno == EINTR)
+            continue;
         if (written <= 0)
             throw std::runtime_error("veyron: write() failed");
         ptr       += written;
@@ -135,6 +139,8 @@ void VeyronClient::send_envelope(const std::string& target, const Envelope& env)
     size_t remaining   = frame.size();
     while (remaining > 0) {
         ssize_t written = ::write(fd_, ptr, remaining);
+        if (written < 0 && errno == EINTR)
+            continue;
         if (written <= 0)
             throw std::runtime_error("veyron: write() failed");
         ptr       += written;

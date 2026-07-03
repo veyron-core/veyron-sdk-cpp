@@ -6,6 +6,7 @@
 #include <zstd.h>
 
 #include <array>
+#include <cerrno>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -110,6 +111,8 @@ static void recv_exact(int fd, uint8_t* buf, size_t n) {
     size_t total = 0;
     while (total < n) {
         const ssize_t r = ::read(fd, buf + total, n - total);
+        if (r < 0 && errno == EINTR)
+            continue;
         if (r <= 0)
             throw std::runtime_error("veyron: connection closed or recv error");
         total += static_cast<size_t>(r);
@@ -207,6 +210,8 @@ FrameResult read_frame_full(int fd, const std::array<uint8_t, 32>* session_key) 
                             result.mac.data(), MAC_TAG_LEN))
                 throw std::runtime_error("veyron: MAC verification failed");
         }
+    } else if (session_key != nullptr) {
+        throw std::runtime_error("veyron: MAC missing on secured connection");
     }
 
     return result;
