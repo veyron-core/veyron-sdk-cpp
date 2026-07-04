@@ -67,6 +67,25 @@ find_package(veyron-sdk REQUIRED)
 target_link_libraries(my_plugin PRIVATE veyron::sdk)
 ```
 
+A `conanfile.py` is present in this directory, but the package is **not
+published anywhere yet** — protocol vendoring and the wire-crate split are
+still moving. For now, consume via:
+
+- Git submodule + `add_subdirectory`, or
+- local Conan use: `conan create .` against a private/local remote
+  (Artifactory, self-hosted) — see `conanfile.py`.
+
+### Packaging plan
+
+1. **Now:** no public package. Recipe lives in-tree, iterate freely —
+   version bumps cost nothing since there's no external review.
+2. **Once stable** (proto + ABI settle, wire-crate split lands): publish
+   to a real Conan remote for external consumers.
+3. **Later, optionally:** submit the recipe to [ConanCenter
+   Index](https://github.com/conan-io/conan-center-index). Each version
+   there requires a fresh PR through their CI + human review, so it only
+   pays off once the API stops churning.
+
 ## License
 
 MIT
