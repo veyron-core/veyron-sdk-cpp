@@ -13,8 +13,15 @@ find_package(Threads REQUIRED)
 find_package(Protobuf REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(absl REQUIRED)
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(ZSTD REQUIRED IMPORTED_TARGET libzstd)
+find_package(zstd REQUIRED)
+
+# zstd's CMake config (both upstream and Conan) exports either
+# zstd::libzstd_shared or zstd::libzstd_static depending on how it was built.
+if(TARGET zstd::libzstd_shared)
+    set(ZSTD_TARGET zstd::libzstd_shared)
+else()
+    set(ZSTD_TARGET zstd::libzstd_static)
+endif()
 
 # Generate C++ bindings from the vendored proto (sourced from veyron-wire's
 # wire/proto/veyron_protocol.proto — re-copy by hand when the protocol changes)
@@ -41,6 +48,7 @@ target_include_directories(veyron_sdk_cpp
     PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/proto>
     $<INSTALL_INTERFACE:include>
 )
 
@@ -51,7 +59,7 @@ target_link_libraries(veyron_sdk_cpp
     absl::strings
     absl::log_internal_check_op
     OpenSSL::Crypto
-    PkgConfig::ZSTD
+    ${ZSTD_TARGET}
     Threads::Threads
 )
 
