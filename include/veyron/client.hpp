@@ -28,6 +28,13 @@ public:
     Envelope register_plugin(const std::string& plugin_id,
                              const std::string& jwt_token = "");
 
+    // Same, declaring a manifest (permissions/actions/events/ipc_targets) —
+    // required for IPC send permission and kernel-brokered action routing
+    // (PluginManifest.actions), neither of which work with an empty manifest.
+    Envelope register_plugin(const std::string& plugin_id,
+                             const PluginManifest& manifest,
+                             const std::string& jwt_token = "");
+
     void    send(const std::string& target, const Envelope& env);
     Envelope recv();
 

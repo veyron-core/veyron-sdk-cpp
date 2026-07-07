@@ -32,13 +32,19 @@ public:
     virtual void on_message(const Envelope& env) = 0;
     virtual void on_shutdown() {}
 
+    // Declared capabilities: permissions, provided actions, event
+    // subscriptions, IPC targets. Default is empty (mirrors the Rust SDK's
+    // Plugin::manifest) — override to unlock IPC send / action-provider
+    // routing, both of which the kernel default-denies on an empty manifest.
+    virtual PluginManifest manifest() const { return PluginManifest{}; }
+
     const std::string& jwt_token() const { return jwt_token_; }
     const std::string& socket_path() const { return socket_path_; }
 
     void run() {
         client_.connect();
 
-        Envelope ack = client_.register_plugin(plugin_id_, jwt_token_);
+        Envelope ack = client_.register_plugin(plugin_id_, manifest(), jwt_token_);
         if (!ack.plugin_register_ack().accepted()) {
             throw std::runtime_error(
                 "veyron: registration rejected: " +

@@ -43,12 +43,19 @@ void VeyronClient::close() {
 
 Envelope VeyronClient::register_plugin(const std::string& plugin_id,
                                         const std::string& jwt_token) {
+    return register_plugin(plugin_id, PluginManifest{}, jwt_token);
+}
+
+Envelope VeyronClient::register_plugin(const std::string& plugin_id,
+                                        const PluginManifest& manifest,
+                                        const std::string& jwt_token) {
     plugin_id_ = plugin_id;
 
     Envelope env;
     auto* reg = env.mutable_plugin_register();
     reg->set_plugin_id(plugin_id);
     reg->set_jwt_token(jwt_token);
+    *reg->mutable_manifest() = manifest;
 
     // Registration frame is always CRC-only; session_key not yet derived.
     send_envelope_no_mac("kernel", env);

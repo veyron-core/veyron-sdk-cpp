@@ -23,6 +23,14 @@ public:
         client_.subscribe({"system.low_memory"});
     }
 
+    // Declares the "echo" action so the kernel's action broker
+    // (find_action_provider) routes ActionRequests here.
+    PluginManifest manifest() const override {
+        PluginManifest m;
+        m.add_actions("echo");
+        return m;
+    }
+
     void on_message(const Envelope& env) override {
         if (env.has_action_request()) {
             handle_action(env.action_request());

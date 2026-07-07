@@ -16,6 +16,9 @@ bool is_directory(const std::string& path) {
 } // namespace
 
 std::string default_socket_path() {
+    if (const char* explicit_path = std::getenv("VEYRON_SOCKET_PATH"); explicit_path && *explicit_path) {
+        return std::string(explicit_path);
+    }
     if (const char* xdg = std::getenv("XDG_RUNTIME_DIR"); xdg && *xdg) {
         return std::string(xdg) + "/veyron.sock";
     }
