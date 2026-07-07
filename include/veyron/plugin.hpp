@@ -32,6 +32,11 @@ public:
     virtual void on_message(const Envelope& env) = 0;
     virtual void on_shutdown() {}
 
+    // Called for each delivered Event. Default is a no-op that still lets
+    // run() send EventAck — override to act on it. Throw to skip the ack
+    // (kernel retries); a plain return acks it.
+    virtual void on_event(const Event& event) { (void)event; }
+
     // Declared capabilities: permissions, provided actions, event
     // subscriptions, IPC targets. Default is empty (mirrors the Rust SDK's
     // Plugin::manifest) — override to unlock IPC send / action-provider
@@ -66,6 +71,16 @@ public:
                             std::chrono::system_clock::now().time_since_epoch())
                             .count());
                     client_.send("kernel", pong);
+                    continue;
+                }
+                if (env.has_event()) {
+                    // On handler error no ack is sent — the kernel will retry
+                    // (mirrors the Rust SDK; T-06).
+                    try {
+                        on_event(env.event());
+                        client_.ack_event(env.event().event_id());
+                    } catch (...) {
+                    }
                     continue;
                 }
                 on_message(env);

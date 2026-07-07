@@ -26,7 +26,9 @@ class RecordingPlugin : public Plugin {
 public:
     using Plugin::Plugin;
     std::vector<Envelope> seen;
+    std::vector<Event> events_seen;
     void on_message(const Envelope& env) override { seen.push_back(env); }
+    void on_event(const Event& event) override { events_seen.push_back(event); }
 };
 
 void write_all(int fd, const std::vector<uint8_t>& bytes) {
@@ -108,4 +110,61 @@ TEST(PluginRunLoop, AnswersWatchdogPingWithPong) {
     EXPECT_GT(captured_pong.pong().server_timestamp(), 0u);
     EXPECT_TRUE(plugin.seen.empty())
         << "Ping must be handled by the base class, not passed to on_message";
+}
+
+// T-06: Event delivery must reach on_event and get auto-acked, or the kernel
+// retries it until max_retries then drops it — every event to a stock C++
+// plugin was silently lost before this fix.
+TEST(PluginRunLoop, DispatchesEventToOnEventAndSendsAck) {
+    std::string sock_path =
+        "/tmp/veyron-test-event-" + std::to_string(::getpid()) + ".sock";
+    ::unlink(sock_path.c_str());
+
+    int listen_fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    ASSERT_GE(listen_fd, 0);
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    std::strncpy(addr.sun_path, sock_path.c_str(), sizeof(addr.sun_path) - 1);
+    ASSERT_EQ(::bind(listen_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)), 0);
+    ASSERT_EQ(::listen(listen_fd, 1), 0);
+
+    bool got_ack = false;
+    std::string acked_event_id;
+
+    std::thread fake_kernel([&] {
+        int fd = ::accept(listen_fd, nullptr, nullptr);
+        ASSERT_GE(fd, 0);
+
+        Envelope reg = recv_envelope(fd);
+        EXPECT_TRUE(reg.has_plugin_register());
+        Envelope ack;
+        ack.mutable_plugin_register_ack()->set_accepted(true);
+        send_envelope(fd, ack);
+
+        Envelope event_env;
+        event_env.mutable_event()->set_event_id("evt-99");
+        send_envelope(fd, event_env);
+
+        Envelope reply = recv_envelope(fd);
+        got_ack = reply.has_event_ack();
+        acked_event_id = reply.event_ack().event_id();
+
+        Envelope shutdown;
+        shutdown.mutable_plugin_shutdown();
+        send_envelope(fd, shutdown);
+        ::close(fd);
+    });
+
+    RecordingPlugin plugin("test-plugin", sock_path);
+    plugin.run();
+    fake_kernel.join();
+    ::close(listen_fd);
+    ::unlink(sock_path.c_str());
+
+    ASSERT_TRUE(got_ack) << "run loop must send EventAck after on_event";
+    EXPECT_EQ(acked_event_id, "evt-99");
+    ASSERT_EQ(plugin.events_seen.size(), 1u);
+    EXPECT_EQ(plugin.events_seen[0].event_id(), "evt-99");
+    EXPECT_TRUE(plugin.seen.empty())
+        << "Event must be handled by the base class, not passed to on_message";
 }

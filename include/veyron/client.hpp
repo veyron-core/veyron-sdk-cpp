@@ -39,6 +39,9 @@ public:
     Envelope recv();
 
     void   subscribe(const std::vector<std::string>& event_types);
+    // Confirms an Event was received and handled — kernel stops retrying it.
+    // An un-acked event is redelivered up to max_retries then dropped (T-06).
+    void   ack_event(const std::string& event_id);
     double ping();
 
 private:

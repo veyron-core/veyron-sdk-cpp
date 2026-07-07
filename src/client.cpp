@@ -96,6 +96,12 @@ void VeyronClient::subscribe(const std::vector<std::string>& event_types) {
     send_envelope("kernel", env);
 }
 
+void VeyronClient::ack_event(const std::string& event_id) {
+    Envelope env;
+    env.mutable_event_ack()->set_event_id(event_id);
+    send_envelope("kernel", env);
+}
+
 double VeyronClient::ping() {
     using clk = std::chrono::steady_clock;
     using sys = std::chrono::system_clock;
