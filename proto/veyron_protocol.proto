@@ -28,6 +28,8 @@ message Envelope {
     EventAck          event_ack          = 41;
     Subscribe         subscribe          = 42;
     Unsubscribe       unsubscribe        = 43;
+    EventPublish      event_publish      = 44;
+    EventPublishAck   event_publish_ack  = 45;
 
     // Peer-to-peer plugin<->plugin streaming only — the kernel does not
     // consume audio itself. Sending this with target "kernel" is a usage
@@ -113,6 +115,7 @@ enum PermissionType {
   PERMISSION_IPC_SEND   = 10; // send messages to other plugins (peer-to-peer)
   PERMISSION_AUDIO_STREAM = 11; // send/receive raw audio frames via FLAG_RAW_BINARY
   PERMISSION_KERNEL_ADMIN = 12; // admin KernelCommands (reload_config etc); health_check exempt
+  PERMISSION_EVENT_PUBLISH = 13; // publish events to the kernel event bus
 }
 
 
@@ -194,6 +197,27 @@ message Subscribe {
 // plugin → kernel: unsubscribe
 message Unsubscribe {
   repeated string event_types = 1;
+}
+
+// plugin → kernel: publish an event. The kernel namespaces event_type as
+// "plugin.<sender_id>.<event_type>" before delivery — see
+// docs/superpowers/specs/2026-07-06-plugin-event-publish-design.md.
+message EventPublish {
+  string event_type   = 1;
+  bytes  payload_json  = 2;
+}
+
+message EventPublishAck {
+  string             event_id = 1;  // kernel-assigned
+  EventPublishStatus status   = 2;
+  string             error    = 3;
+}
+
+enum EventPublishStatus {
+  EVENT_PUBLISH_UNKNOWN         = 0;  // never explicitly set; a missed set_status() shows up as this, not OK
+  EVENT_PUBLISH_OK              = 1;
+  EVENT_PUBLISH_ERROR           = 2;
+  EVENT_PUBLISH_PERMISSION_DENY = 3;
 }
 
 
