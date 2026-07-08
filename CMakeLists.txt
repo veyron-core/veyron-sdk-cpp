@@ -75,6 +75,21 @@ target_link_libraries(veyron_sdk_tests
 )
 add_test(NAME veyron_sdk_tests COMMAND veyron_sdk_tests)
 
+# ── Fuzzing (T-14) ─────────────────────────────────────────────────────────
+# libFuzzer requires Clang; off by default so a normal GCC/Clang build (and
+# the veyron_sdk_tests target above) is unaffected.
+option(VEYRON_BUILD_FUZZERS "Build libFuzzer harnesses (requires Clang)" OFF)
+if(VEYRON_BUILD_FUZZERS)
+    if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        message(FATAL_ERROR "VEYRON_BUILD_FUZZERS requires Clang: reconfigure with -DCMAKE_CXX_COMPILER=clang++")
+    endif()
+    add_executable(fuzz_framing fuzz/fuzz_framing.cpp src/framing.cpp src/mac.cpp)
+    target_include_directories(fuzz_framing PRIVATE include)
+    target_compile_options(fuzz_framing PRIVATE -fsanitize=fuzzer,address,undefined -g -O1)
+    target_link_options(fuzz_framing PRIVATE -fsanitize=fuzzer,address,undefined)
+    target_link_libraries(fuzz_framing PRIVATE OpenSSL::Crypto ${ZSTD_TARGET})
+endif()
+
 # ── Examples ───────────────────────────────────────────────────────────────
 add_executable(echo_plugin examples/echo_plugin.cpp)
 target_link_libraries(echo_plugin PRIVATE veyron_sdk_cpp)
