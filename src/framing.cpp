@@ -1,12 +1,14 @@
 #include "veyron/framing.hpp"
 
 #include <arpa/inet.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <zstd.h>
 
 #include <array>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -119,6 +121,37 @@ static void recv_exact(int fd, uint8_t* buf, size_t n) {
     }
 }
 
+using Deadline = std::chrono::steady_clock::time_point;
+
+static void recv_exact_deadline(int fd, uint8_t* buf, size_t n, Deadline deadline) {
+    size_t total = 0;
+    while (total < n) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline)
+            throw std::runtime_error("veyron: frame read timed out");
+        const auto remaining_ms = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
+
+        struct pollfd pfd {};
+        pfd.fd = fd;
+        pfd.events = POLLIN;
+        const int pr = ::poll(&pfd, 1, static_cast<int>(remaining_ms));
+        if (pr < 0) {
+            if (errno == EINTR)
+                continue;
+            throw std::runtime_error("veyron: poll failed during frame read");
+        }
+        if (pr == 0)
+            throw std::runtime_error("veyron: frame read timed out");
+
+        const ssize_t r = ::read(fd, buf + total, n - total);
+        if (r < 0 && errno == EINTR)
+            continue;
+        if (r <= 0)
+            throw std::runtime_error("veyron: connection closed or recv error");
+        total += static_cast<size_t>(r);
+    }
+}
+
 // Bounded zstd decompression mirroring src/ipc/framing.rs:234.
 static std::vector<uint8_t> zstd_decompress_bounded(const uint8_t* data, size_t len) {
     unsigned long long content_size = ZSTD_getFrameContentSize(data, len);
@@ -151,11 +184,17 @@ static void build_header(uint8_t out[FRAME_HEADER_SIZE], uint16_t flags,
 }
 
 // ---------------------------------------------------------------------------
-// read_frame_full
+// read_frame_full_with_timeout
 // ---------------------------------------------------------------------------
-FrameResult read_frame_full(int fd, const std::array<uint8_t, 32>* session_key) {
+FrameResult read_frame_full_with_timeout(int fd, const std::array<uint8_t, 32>* session_key,
+                                         int frame_timeout_ms) {
     uint8_t header[FRAME_HEADER_SIZE];
-    recv_exact(fd, header, FRAME_HEADER_SIZE);
+    // Block indefinitely for the first byte of the next frame — an idle
+    // connection between frames must not be torn down. Once a byte arrives,
+    // a frame is in progress and the remainder is bounded by frame_timeout_ms.
+    recv_exact(fd, header, 1);
+    const Deadline deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(frame_timeout_ms);
+    recv_exact_deadline(fd, header + 1, FRAME_HEADER_SIZE - 1, deadline);
 
     uint16_t magic;
     std::memcpy(&magic, header + 0, 2);
@@ -178,7 +217,7 @@ FrameResult read_frame_full(int fd, const std::array<uint8_t, 32>* session_key) 
 
     std::vector<uint8_t> payload(length);
     if (length > 0)
-        recv_exact(fd, payload.data(), length);
+        recv_exact_deadline(fd, payload.data(), length, deadline);
 
     // CRC is over the wire bytes (possibly compressed); verify before decompressing.
     if (veyron_crc32(payload.data(), payload.size()) != expected_crc)
@@ -201,7 +240,7 @@ FrameResult read_frame_full(int fd, const std::array<uint8_t, 32>* session_key) 
     result.payload = std::move(payload);
 
     if (flags & FLAG_MAC_PRESENT) {
-        recv_exact(fd, result.mac.data(), MAC_TAG_LEN);
+        recv_exact_deadline(fd, result.mac.data(), MAC_TAG_LEN, deadline);
         result.has_mac = true;
         if (session_key != nullptr) {
             if (!verify_tag(*session_key,

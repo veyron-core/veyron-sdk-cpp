@@ -67,7 +67,7 @@ target_link_libraries(veyron_sdk_cpp
 include(CTest)
 find_package(GTest REQUIRED)
 
-add_executable(veyron_sdk_tests tests/test_mac.cpp tests/test_env.cpp tests/test_plugin.cpp tests/test_plugin_ping.cpp tests/test_framing.cpp)
+add_executable(veyron_sdk_tests tests/test_mac.cpp tests/test_env.cpp tests/test_plugin.cpp tests/test_plugin_ping.cpp tests/test_framing.cpp tests/test_framing_timeout.cpp)
 target_link_libraries(veyron_sdk_tests
     PRIVATE
     veyron_sdk_cpp

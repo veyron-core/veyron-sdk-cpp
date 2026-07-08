@@ -54,6 +54,10 @@ struct FrameResult {
     std::array<uint8_t, FRAME_HEADER_SIZE>  raw_header = {};
 };
 
+// Default window the rest of a frame (after its first byte arrives) must
+// complete within — bounds slow-loris stalls. See read_frame_full_with_timeout.
+static constexpr int FRAME_READ_TIMEOUT_MS = 10000;
+
 // Read one frame and return full FrameResult. Payload is always plaintext:
 // if the wire frame carries FLAG_COMPRESSED, it is transparently decompressed
 // (bounded to MAX_PAYLOAD_SIZE) and `flags`/`raw_header` describe the
@@ -61,8 +65,19 @@ struct FrameResult {
 // If session_key is non-null and FLAG_MAC_PRESENT is set, verifies the MAC tag;
 // throws std::runtime_error("veyron: MAC verification failed") on mismatch.
 // If session_key is null, MAC bytes are read and stored but not verified.
-FrameResult read_frame_full(int fd,
-                            const std::array<uint8_t, 32>* session_key = nullptr);
+//
+// Blocks indefinitely waiting for the first byte of the next frame (an idle
+// connection must not be torn down); once a byte arrives, the remainder of
+// the frame must complete within frame_timeout_ms or this throws
+// std::runtime_error("veyron: frame read timed out").
+FrameResult read_frame_full_with_timeout(int fd,
+                                         const std::array<uint8_t, 32>* session_key,
+                                         int frame_timeout_ms);
+
+inline FrameResult read_frame_full(int fd,
+                                   const std::array<uint8_t, 32>* session_key = nullptr) {
+    return read_frame_full_with_timeout(fd, session_key, FRAME_READ_TIMEOUT_MS);
+}
 
 // Backward-compat: returns only payload bytes. Does NOT verify MAC.
 std::vector<uint8_t> read_frame(int fd);
