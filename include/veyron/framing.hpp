@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -15,8 +16,30 @@ static constexpr size_t   MAX_PAYLOAD_SIZE  = 1048576; // 1 MiB
 
 // FLAG_MAC_PRESENT is defined in mac.hpp (included above).
 static constexpr uint16_t FLAG_COMPRESSED   = 0x0002; // payload is zstd-compressed; CRC32 over compressed bytes
+static constexpr uint16_t FLAG_FRAGMENTED   = 0x0004; // payload is one fragment of a larger message; see FRAG_HEADER_SIZE
 static constexpr uint16_t FLAG_RAW_BINARY   = 0x0010; // payload is raw bytes (PCM/Opus); skip Protobuf parse
 static constexpr size_t   COMPRESS_THRESHOLD = 65536; // payloads >= this size are candidates for compression
+
+// Byte length of the fragment metadata header embedded at the start of a
+// FLAG_FRAGMENTED frame's payload. Layout (all big-endian):
+//   [fragment_id: u16][sequence: u16][total: u16][stream_id: u32]
+// Mirrors wire/src/framing.rs's FRAG_HEADER_SIZE/FragmentHeader.
+static constexpr size_t FRAG_HEADER_SIZE = 10;
+
+struct FragmentHeader {
+    uint16_t fragment_id = 0;
+    uint16_t sequence    = 0;
+    uint16_t total       = 0;
+    uint32_t stream_id   = 0;
+};
+
+// Builds the 10-byte fragment metadata header.
+std::vector<uint8_t> pack_frag_header(uint16_t fragment_id, uint16_t sequence,
+                                      uint16_t total, uint32_t stream_id);
+
+// Parses a FragmentHeader from the start of a fragment payload. Returns
+// std::nullopt if payload is shorter than FRAG_HEADER_SIZE.
+std::optional<FragmentHeader> parse_frag_header(const uint8_t* payload, size_t len);
 
 // Wire format (all multi-byte fields big-endian):
 //   [0..1]   magic   uint16  = 0x5652
@@ -30,16 +53,21 @@ static constexpr size_t   COMPRESS_THRESHOLD = 65536; // payloads >= this size a
 // CRC-32/ISO-HDLC
 uint32_t veyron_crc32(const uint8_t* data, size_t len);
 
-// Build CRC-only frame (no MAC). Backward-compatible.
+// Build CRC-only frame (no MAC). Backward-compatible. extra_flags is OR'd
+// into the wire flags (e.g. FLAG_FRAGMENTED for fragment frames).
 std::vector<uint8_t> pack_frame(const std::string& target,
-                                const std::vector<uint8_t>& payload);
+                                const std::vector<uint8_t>& payload,
+                                uint16_t extra_flags = 0);
 std::vector<uint8_t> pack_frame(const std::string& target,
-                                const std::string& payload);
+                                const std::string& payload,
+                                uint16_t extra_flags = 0);
 
-// Build a MAC frame: sets FLAG_MAC_PRESENT and appends 32-byte HMAC-SHA256 tag.
+// Build a MAC frame: sets FLAG_MAC_PRESENT (plus any extra_flags) and appends
+// a 32-byte HMAC-SHA256 tag.
 std::vector<uint8_t> pack_frame_mac(const std::string& target,
                                     const std::vector<uint8_t>& payload,
-                                    const std::array<uint8_t, 32>& session_key);
+                                    const std::array<uint8_t, 32>& session_key,
+                                    uint16_t extra_flags = 0);
 
 // Result of read_frame_full.
 struct FrameResult {

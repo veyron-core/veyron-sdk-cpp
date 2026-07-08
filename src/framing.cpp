@@ -39,10 +39,45 @@ uint32_t veyron_crc32(const uint8_t* data, size_t len) {
 }
 
 // ---------------------------------------------------------------------------
+// Fragment header pack/parse (T-18)
+// ---------------------------------------------------------------------------
+std::vector<uint8_t> pack_frag_header(uint16_t fragment_id, uint16_t sequence,
+                                      uint16_t total, uint32_t stream_id) {
+    std::vector<uint8_t> out(FRAG_HEADER_SIZE);
+    const uint16_t fragment_id_be = htons(fragment_id);
+    const uint16_t sequence_be    = htons(sequence);
+    const uint16_t total_be       = htons(total);
+    const uint32_t stream_id_be   = htonl(stream_id);
+    std::memcpy(out.data() + 0, &fragment_id_be, 2);
+    std::memcpy(out.data() + 2, &sequence_be, 2);
+    std::memcpy(out.data() + 4, &total_be, 2);
+    std::memcpy(out.data() + 6, &stream_id_be, 4);
+    return out;
+}
+
+std::optional<FragmentHeader> parse_frag_header(const uint8_t* payload, size_t len) {
+    if (len < FRAG_HEADER_SIZE)
+        return std::nullopt;
+    FragmentHeader hdr;
+    uint16_t fragment_id_be, sequence_be, total_be;
+    uint32_t stream_id_be;
+    std::memcpy(&fragment_id_be, payload + 0, 2);
+    std::memcpy(&sequence_be, payload + 2, 2);
+    std::memcpy(&total_be, payload + 4, 2);
+    std::memcpy(&stream_id_be, payload + 6, 4);
+    hdr.fragment_id = ntohs(fragment_id_be);
+    hdr.sequence    = ntohs(sequence_be);
+    hdr.total       = ntohs(total_be);
+    hdr.stream_id   = ntohl(stream_id_be);
+    return hdr;
+}
+
+// ---------------------------------------------------------------------------
 // pack_frame (CRC-only, backward-compatible)
 // ---------------------------------------------------------------------------
 std::vector<uint8_t> pack_frame(const std::string& target,
-                                const std::vector<uint8_t>& payload) {
+                                const std::vector<uint8_t>& payload,
+                                uint16_t extra_flags) {
     if (payload.size() > MAX_PAYLOAD_SIZE)
         throw std::runtime_error("veyron: payload exceeds 1 MiB limit");
 
@@ -51,7 +86,8 @@ std::vector<uint8_t> pack_frame(const std::string& target,
     uint8_t header[FRAME_HEADER_SIZE] = {};
     const uint16_t magic_be = htons(FRAME_MAGIC);
     std::memcpy(header + 0, &magic_be, 2);
-    // flags = 0 (no MAC)
+    const uint16_t flags_be = htons(extra_flags);
+    std::memcpy(header + 2, &flags_be, 2);
     const uint32_t len_be = htonl(static_cast<uint32_t>(payload.size()));
     std::memcpy(header + 4, &len_be, 4);
     const size_t copy_len = std::min(target.size(), size_t{32});
@@ -67,8 +103,9 @@ std::vector<uint8_t> pack_frame(const std::string& target,
 }
 
 std::vector<uint8_t> pack_frame(const std::string& target,
-                                const std::string& payload) {
-    return pack_frame(target, std::vector<uint8_t>(payload.begin(), payload.end()));
+                                const std::string& payload,
+                                uint16_t extra_flags) {
+    return pack_frame(target, std::vector<uint8_t>(payload.begin(), payload.end()), extra_flags);
 }
 
 // ---------------------------------------------------------------------------
@@ -76,7 +113,8 @@ std::vector<uint8_t> pack_frame(const std::string& target,
 // ---------------------------------------------------------------------------
 std::vector<uint8_t> pack_frame_mac(const std::string& target,
                                     const std::vector<uint8_t>& payload,
-                                    const std::array<uint8_t, 32>& session_key) {
+                                    const std::array<uint8_t, 32>& session_key,
+                                    uint16_t extra_flags) {
     if (payload.size() > MAX_PAYLOAD_SIZE)
         throw std::runtime_error("veyron: payload exceeds 1 MiB limit");
 
@@ -85,7 +123,7 @@ std::vector<uint8_t> pack_frame_mac(const std::string& target,
     uint8_t header[FRAME_HEADER_SIZE] = {};
     const uint16_t magic_be = htons(FRAME_MAGIC);
     std::memcpy(header + 0, &magic_be, 2);
-    const uint16_t flags_be = htons(FLAG_MAC_PRESENT);
+    const uint16_t flags_be = htons(static_cast<uint16_t>(FLAG_MAC_PRESENT | extra_flags));
     std::memcpy(header + 2, &flags_be, 2);
     const uint32_t len_be = htonl(static_cast<uint32_t>(payload.size()));
     std::memcpy(header + 4, &len_be, 4);
