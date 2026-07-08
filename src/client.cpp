@@ -23,6 +23,12 @@ void VeyronClient::connect() {
     if (fd_ < 0)
         throw std::runtime_error("veyron: socket() failed");
 
+    if (socket_path_.size() >= sizeof(sockaddr_un{}.sun_path)) {
+        ::close(fd_);
+        fd_ = -1;
+        throw std::runtime_error("veyron: socket path too long: " + socket_path_);
+    }
+
     struct sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
     std::strncpy(addr.sun_path, socket_path_.c_str(), sizeof(addr.sun_path) - 1);
