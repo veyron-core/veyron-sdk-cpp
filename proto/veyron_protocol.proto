@@ -144,6 +144,7 @@ enum ActionStatus {
   ACTION_TIMEOUT         = 2;
   ACTION_PERMISSION_DENY = 3;  // plugin didn't declare the required permission
   ACTION_NOT_FOUND       = 4;  // no such action in the kernel
+  ACTION_QUOTA_EXCEEDED  = 5;  // caller's per-provider rate/concurrency quota exceeded (R6-03)
 }
 
 
