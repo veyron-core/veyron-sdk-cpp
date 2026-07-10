@@ -18,8 +18,11 @@ message Envelope {
     PluginRegisterAck plugin_register_ack = 11;
     PluginShutdown    plugin_shutdown    = 12;
 
-    ActionRequest     action_request     = 20;
-    ActionResponse    action_response    = 21;
+    ActionRequest       action_request        = 20;
+    ActionResponse      action_response       = 21;
+    ActionRequestChunk  action_request_chunk  = 22;
+    ActionResponseChunk action_response_chunk = 23;
+    ActionStreamAbort   action_stream_abort   = 24;
 
     KernelCommand     kernel_command     = 30;
     KernelCommandAck  kernel_command_ack = 31;
@@ -129,6 +132,7 @@ message ActionRequest {
   string  action      = 2;  // action name: "get_weather", "play_audio"...
   bytes   params_json = 3;  // json payload with action params
   uint32  timeout_ms  = 4;  // response wait timeout in ms (0 = default 30s)
+  bool    streaming   = 5;  // caller will follow with ActionRequestChunk frames (R6-02)
 }
 
 message ActionResponse {
@@ -138,13 +142,39 @@ message ActionResponse {
   string      error       = 4;  // set when status != OK
 }
 
+// R6-02: incremental body chunks for a streaming action. Neither message is
+// reassembled or reordered by the kernel — it's a dumb byte router here as
+// everywhere else; `seq` is for the SDK's own bookkeeping only.
+message ActionRequestChunk {
+  string action_id = 1;
+  uint32 seq       = 2;
+  bytes  chunk     = 3;
+  bool   final     = 4;  // true on the last chunk of the request body
+}
+
+message ActionResponseChunk {
+  string action_id = 1;
+  uint32 seq       = 2;
+  bytes  chunk     = 3;
+  // no `final` field: the stream is terminated by the existing ActionResponse.
+}
+
+// Kernel-originated. Sent to both the requester and the provider when the
+// kernel aborts an in-flight stream (e.g. receiver backpressure) so neither
+// side is left silently waiting on a stream that will never complete.
+message ActionStreamAbort {
+  string action_id = 1;
+  string reason    = 2;
+}
+
 enum ActionStatus {
-  ACTION_OK              = 0;
-  ACTION_ERROR           = 1;
-  ACTION_TIMEOUT         = 2;
-  ACTION_PERMISSION_DENY = 3;  // plugin didn't declare the required permission
-  ACTION_NOT_FOUND       = 4;  // no such action in the kernel
-  ACTION_QUOTA_EXCEEDED  = 5;  // caller's per-provider rate/concurrency quota exceeded (R6-03)
+  ACTION_OK                  = 0;
+  ACTION_ERROR               = 1;
+  ACTION_TIMEOUT             = 2;
+  ACTION_PERMISSION_DENY     = 3;  // plugin didn't declare the required permission
+  ACTION_NOT_FOUND           = 4;  // no such action in the kernel
+  ACTION_QUOTA_EXCEEDED      = 5;  // caller's per-provider rate/concurrency quota exceeded (R6-03)
+  ACTION_STREAM_BACKPRESSURE = 6;  // R6-02
 }
 
 
