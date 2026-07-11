@@ -23,6 +23,7 @@ message Envelope {
     ActionRequestChunk  action_request_chunk  = 22;
     ActionResponseChunk action_response_chunk = 23;
     ActionStreamAbort   action_stream_abort   = 24;
+    SessionClose        session_close         = 25;
 
     KernelCommand     kernel_command     = 30;
     KernelCommandAck  kernel_command_ack = 31;
@@ -165,6 +166,15 @@ message ActionResponseChunk {
 message ActionStreamAbort {
   string action_id = 1;
   string reason    = 2;
+}
+
+// R6-04: graceful termination of a long-lived streaming session, sent by
+// either peer. Kernel forwards to the other side and evicts pending_actions.
+// Forced termination (backpressure, disconnect, idle timeout) still uses
+// the existing ActionStreamAbort (R6-02) — SessionClose is peer-initiated only.
+message SessionClose {
+  string action_id = 1;
+  string reason     = 2;  // human-readable, e.g. "done", "client closed"
 }
 
 enum ActionStatus {
