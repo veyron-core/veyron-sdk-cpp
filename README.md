@@ -60,6 +60,28 @@ on `PluginShutdown`. See `examples/echo_plugin.cpp` for a fuller example.
 | `VEYRON_JWT_TOKEN`   | JWT presented at registration (required on secured kernels).   |
 | `VEYRON_JWT_SECRET`  | Shared secret; enables per-frame HMAC-SHA256 tags after registration. |
 
+## Client API
+
+For lower-level control, use `VeyronClient` directly:
+
+```cpp
+VeyronClient client(socket_path, secret);
+client.connect();
+auto ack = client.register_plugin("weather", manifest, jwt_token);
+
+client.subscribe({"alarm.fired"});
+auto pub_ack = client.publish_event("weather.updated",
+                                     std::vector<uint8_t>{'{', '}'}, 5000);
+double latency = client.ping();
+```
+
+`publish_event` requires `PERMISSION_EVENT_PUBLISH`; `timeout_ms == 0` uses
+the kernel's 30s default. It returns the kernel's `EventPublishAck` as-is —
+inspect `ack.status()` yourself (`EVENT_PUBLISH_OK`/`ERROR`/`PERMISSION_DENY`)
+— and only throws `std::runtime_error` on a kernel `Error` envelope or on
+timeout. Requests and responses are matched on a single connection; drive
+request/response traffic from one thread.
+
 ## Consuming via CMake
 
 ```cmake
