@@ -66,6 +66,15 @@ public:
     void   ack_event(const std::string& event_id);
     double ping();
 
+    // Publish an event to the kernel event bus. Requires PERMISSION_EVENT_PUBLISH.
+    // timeout_ms == 0 uses the kernel default of 30s. Throws std::runtime_error
+    // on a kernel Error envelope or on timeout. The returned EventPublishAck is
+    // returned as-is regardless of its status field (OK/ERROR/PERMISSION_DENY) —
+    // callers inspect ack.status() themselves, mirroring the Rust SDK.
+    EventPublishAck publish_event(const std::string& event_type,
+                                  const std::vector<uint8_t>& payload_json,
+                                  uint32_t timeout_ms = 0);
+
 private:
     std::string                            socket_path_;
     int                                    fd_ = -1;
@@ -110,6 +119,10 @@ private:
     void send_envelope_no_mac(const std::string& target, const Envelope& env);
     // Send with MAC when session_key_ is set, else CRC-only.
     void send_envelope(const std::string& target, const Envelope& env);
+
+    // Like recv_frame(), but bounds the total wait (including the first byte)
+    // by deadline instead of the per-frame idle-forever default.
+    FrameResult recv_frame_with_deadline(std::chrono::steady_clock::time_point deadline);
 };
 
 } // namespace veyron

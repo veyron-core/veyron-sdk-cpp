@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -101,6 +102,16 @@ static constexpr int FRAME_READ_TIMEOUT_MS = 10000;
 FrameResult read_frame_full_with_timeout(int fd,
                                          const std::array<uint8_t, 32>* session_key,
                                          int frame_timeout_ms);
+
+// Like read_frame_full_with_timeout, but bounds the wait for the first byte
+// of the frame too (via poll()), not just mid-frame completion. Used by
+// request/response client methods (publish_event, and future streaming/
+// session methods) that need a caller-supplied overall deadline.
+// Throws std::runtime_error("veyron: timed out") if deadline passes before
+// a frame arrives or completes.
+FrameResult read_frame_full_with_deadline(int fd,
+                                          const std::array<uint8_t, 32>* session_key,
+                                          std::chrono::steady_clock::time_point deadline);
 
 inline FrameResult read_frame_full(int fd,
                                    const std::array<uint8_t, 32>* session_key = nullptr) {

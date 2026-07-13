@@ -157,6 +157,21 @@ FrameResult VeyronClient::recv_frame() {
     }
 }
 
+FrameResult VeyronClient::recv_frame_with_deadline(std::chrono::steady_clock::time_point deadline) {
+    const std::array<uint8_t,32>* key_ptr =
+        session_key_.has_value() ? &session_key_.value() : nullptr;
+    while (true) {
+        auto frame = read_frame_full_with_deadline(fd_, key_ptr, deadline);
+        if (frame.flags & FLAG_FRAGMENTED) {
+            auto complete = absorb_fragment(std::move(frame));
+            if (!complete)
+                continue;
+            return std::move(*complete);
+        }
+        return frame;
+    }
+}
+
 Envelope VeyronClient::recv() {
     auto result = recv_frame();
     Envelope env;
@@ -229,6 +244,32 @@ double VeyronClient::ping() {
     send_envelope("kernel", env);
     recv();
     return std::chrono::duration<double>(clk::now() - t0).count();
+}
+
+EventPublishAck VeyronClient::publish_event(const std::string& event_type,
+                                            const std::vector<uint8_t>& payload_json,
+                                            uint32_t timeout_ms) {
+    Envelope env;
+    auto* pub = env.mutable_event_publish();
+    pub->set_event_type(event_type);
+    pub->set_payload_json(payload_json.data(), payload_json.size());
+    send_envelope("kernel", env);
+
+    const auto timeout = std::chrono::milliseconds(timeout_ms == 0 ? 30000 : timeout_ms);
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (true) {
+        auto frame = recv_frame_with_deadline(deadline);
+        Envelope resp;
+        if (!resp.ParseFromArray(frame.payload.data(), static_cast<int>(frame.payload.size())))
+            throw std::runtime_error("veyron: protobuf parse failed");
+
+        if (resp.has_event_publish_ack())
+            return resp.event_publish_ack();
+        if (resp.has_error())
+            throw std::runtime_error("veyron: kernel error: " + resp.error().message() +
+                                     " (" + resp.error().details() + ")");
+        // unrelated traffic while waiting — discard, keep waiting
+    }
 }
 
 void VeyronClient::write_all(const std::vector<uint8_t>& frame) {

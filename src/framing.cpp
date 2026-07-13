@@ -222,6 +222,41 @@ static void build_header(uint8_t out[FRAME_HEADER_SIZE], uint16_t flags,
 }
 
 // ---------------------------------------------------------------------------
+// read_frame_full_with_deadline — bounds the wait for the first byte too,
+// via poll(), then hands off to read_frame_full_with_timeout for the rest.
+// ---------------------------------------------------------------------------
+FrameResult read_frame_full_with_deadline(int fd, const std::array<uint8_t, 32>* session_key,
+                                          Deadline deadline) {
+    while (true) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline)
+            throw std::runtime_error("veyron: timed out");
+        const auto remaining_ms = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
+
+        struct pollfd pfd {};
+        pfd.fd = fd;
+        pfd.events = POLLIN;
+        const int pr = ::poll(&pfd, 1, static_cast<int>(remaining_ms));
+        if (pr < 0) {
+            if (errno == EINTR)
+                continue;
+            throw std::runtime_error("veyron: poll failed during frame read");
+        }
+        if (pr == 0)
+            throw std::runtime_error("veyron: timed out");
+
+        // Data is available; hand off with the remaining budget as the
+        // mid-frame bound. Floor at 1ms so a just-signaled-readable fd
+        // doesn't spuriously time out on the read it was just cleared for.
+        const auto now2 = std::chrono::steady_clock::now();
+        auto remaining_ms2 = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now2).count();
+        if (remaining_ms2 < 1)
+            remaining_ms2 = 1;
+        return read_frame_full_with_timeout(fd, session_key, static_cast<int>(remaining_ms2));
+    }
+}
+
+// ---------------------------------------------------------------------------
 // read_frame_full_with_timeout
 // ---------------------------------------------------------------------------
 FrameResult read_frame_full_with_timeout(int fd, const std::array<uint8_t, 32>* session_key,
