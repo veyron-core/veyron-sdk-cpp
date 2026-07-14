@@ -4,12 +4,26 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <chrono>
 #include <cerrno>
 #include <cstring>
 #include <stdexcept>
 
 namespace veyron {
+
+namespace {
+// Module-level counter, mirroring the rust SDK's free-function
+// next_request_id("act") (not per-connection state).
+std::atomic<uint64_t> g_action_seq{0};
+
+std::string next_action_id() {
+    const uint64_t seq = g_action_seq.fetch_add(1, std::memory_order_relaxed);
+    const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    return "act-" + std::to_string(now_ms) + "-" + std::to_string(seq);
+}
+} // namespace
 
 VeyronClient::VeyronClient(std::string socket_path, std::vector<uint8_t> secret)
     : socket_path_(std::move(socket_path))
@@ -246,6 +260,19 @@ double VeyronClient::ping() {
     return std::chrono::duration<double>(clk::now() - t0).count();
 }
 
+Envelope VeyronClient::wait_for_response(std::chrono::steady_clock::time_point deadline,
+                                         const std::function<bool(const Envelope&)>& is_terminal) {
+    while (true) {
+        auto frame = recv_frame_with_deadline(deadline);
+        Envelope resp;
+        if (!resp.ParseFromArray(frame.payload.data(), static_cast<int>(frame.payload.size())))
+            throw std::runtime_error("veyron: protobuf parse failed");
+        if (is_terminal(resp))
+            return resp;
+        // unrelated traffic while waiting — discard, keep waiting
+    }
+}
+
 EventPublishAck VeyronClient::publish_event(const std::string& event_type,
                                             const std::vector<uint8_t>& payload_json,
                                             uint32_t timeout_ms) {
@@ -257,19 +284,82 @@ EventPublishAck VeyronClient::publish_event(const std::string& event_type,
 
     const auto timeout = std::chrono::milliseconds(timeout_ms == 0 ? 30000 : timeout_ms);
     const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (true) {
-        auto frame = recv_frame_with_deadline(deadline);
-        Envelope resp;
-        if (!resp.ParseFromArray(frame.payload.data(), static_cast<int>(frame.payload.size())))
-            throw std::runtime_error("veyron: protobuf parse failed");
+    Envelope resp = wait_for_response(deadline, [](const Envelope& e) {
+        return e.has_event_publish_ack() || e.has_error();
+    });
+    if (resp.has_error())
+        throw std::runtime_error("veyron: kernel error: " + resp.error().message() +
+                                 " (" + resp.error().details() + ")");
+    return resp.event_publish_ack();
+}
 
-        if (resp.has_event_publish_ack())
-            return resp.event_publish_ack();
-        if (resp.has_error())
-            throw std::runtime_error("veyron: kernel error: " + resp.error().message() +
-                                     " (" + resp.error().details() + ")");
-        // unrelated traffic while waiting — discard, keep waiting
-    }
+ActionResponse VeyronClient::send_action(const std::string& action,
+                                         const std::vector<uint8_t>& params_json,
+                                         uint32_t timeout_ms) {
+    const std::string action_id = next_action_id();
+    Envelope env;
+    auto* req = env.mutable_action_request();
+    req->set_action_id(action_id);
+    req->set_action(action);
+    req->set_params_json(params_json.data(), params_json.size());
+    req->set_timeout_ms(timeout_ms);
+    req->set_streaming(false);
+    send_envelope("kernel", env);
+
+    const auto timeout = std::chrono::milliseconds(timeout_ms == 0 ? 30000 : timeout_ms);
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    Envelope resp = wait_for_response(deadline, [&](const Envelope& e) {
+        return (e.has_action_response() && e.action_response().action_id() == action_id) ||
+               (e.has_action_stream_abort() && e.action_stream_abort().action_id() == action_id) ||
+               e.has_error();
+    });
+    if (resp.has_error())
+        throw std::runtime_error("veyron: kernel error: " + resp.error().message() +
+                                 " (" + resp.error().details() + ")");
+    if (resp.has_action_stream_abort())
+        throw std::runtime_error("veyron: stream aborted: " + resp.action_stream_abort().reason());
+    return resp.action_response();
+}
+
+std::string VeyronClient::send_action_streaming(const std::string& action, uint32_t timeout_ms) {
+    const std::string action_id = next_action_id();
+    Envelope env;
+    auto* req = env.mutable_action_request();
+    req->set_action_id(action_id);
+    req->set_action(action);
+    req->set_timeout_ms(timeout_ms);
+    req->set_streaming(true);
+    send_envelope("kernel", env);
+    return action_id;
+}
+
+void VeyronClient::send_request_chunk(const std::string& action_id, uint32_t seq,
+                                      const std::vector<uint8_t>& chunk, bool is_final) {
+    Envelope env;
+    auto* c = env.mutable_action_request_chunk();
+    c->set_action_id(action_id);
+    c->set_seq(seq);
+    c->set_chunk(chunk.data(), chunk.size());
+    c->set_final(is_final);
+    send_envelope("kernel", env);
+}
+
+void VeyronClient::send_response_chunk(const std::string& action_id, uint32_t seq,
+                                       const std::vector<uint8_t>& chunk) {
+    Envelope env;
+    auto* c = env.mutable_action_response_chunk();
+    c->set_action_id(action_id);
+    c->set_seq(seq);
+    c->set_chunk(chunk.data(), chunk.size());
+    send_envelope("kernel", env);
+}
+
+void VeyronClient::close_session(const std::string& action_id, const std::string& reason) {
+    Envelope env;
+    auto* sc = env.mutable_session_close();
+    sc->set_action_id(action_id);
+    sc->set_reason(reason);
+    send_envelope("kernel", env);
 }
 
 void VeyronClient::write_all(const std::vector<uint8_t>& frame) {

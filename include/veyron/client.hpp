@@ -3,6 +3,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -75,6 +76,28 @@ public:
                                   const std::vector<uint8_t>& payload_json,
                                   uint32_t timeout_ms = 0);
 
+    // Ask the kernel to perform an action and await its ActionResponse.
+    // timeout_ms == 0 uses the kernel default of 30s. Throws std::runtime_error
+    // on a kernel Error envelope, on an ActionStreamAbort for this action_id,
+    // or on timeout.
+    ActionResponse send_action(const std::string& action,
+                               const std::vector<uint8_t>& params_json,
+                               uint32_t timeout_ms = 0);
+
+    // Fire an ActionRequest with streaming=true and return its action_id
+    // immediately — no wait. Caller drives send_request_chunk/recv/
+    // close_session afterward.
+    std::string send_action_streaming(const std::string& action, uint32_t timeout_ms = 0);
+
+    // Fire-and-forget: one chunk of a streaming action's request body.
+    void send_request_chunk(const std::string& action_id, uint32_t seq,
+                            const std::vector<uint8_t>& chunk, bool is_final);
+    // Fire-and-forget: one chunk of a streaming action's response body.
+    void send_response_chunk(const std::string& action_id, uint32_t seq,
+                             const std::vector<uint8_t>& chunk);
+    // Fire-and-forget: tell the peer this action's session is done.
+    void close_session(const std::string& action_id, const std::string& reason);
+
 private:
     std::string                            socket_path_;
     int                                    fd_ = -1;
@@ -123,6 +146,12 @@ private:
     // Like recv_frame(), but bounds the total wait (including the first byte)
     // by deadline instead of the per-frame idle-forever default.
     FrameResult recv_frame_with_deadline(std::chrono::steady_clock::time_point deadline);
+
+    // Loop recv_frame_with_deadline/parse until is_terminal(env) is true or
+    // deadline passes. Shared by publish_event and send_action — each
+    // supplies its own match/discard predicate.
+    Envelope wait_for_response(std::chrono::steady_clock::time_point deadline,
+                               const std::function<bool(const Envelope&)>& is_terminal);
 };
 
 } // namespace veyron
